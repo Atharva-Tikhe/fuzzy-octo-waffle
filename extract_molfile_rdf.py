@@ -1,59 +1,70 @@
 from rdkit import Chem
 import rdkit.Chem.Lipinski as lip
-import re
+import sys
 import subprocess
+
 
 class MolFileExtraction:
 
-    start_regex = r'^  -ISIS- .*'
     end_regex = r'^M  END'
-    molfile_no = r'^\$MFMT \$MIREG .*'
-
+    molfile_no = r'^\$MFMT'
 
     start_index = []
     end_index = []
 
     def __init__(self, file: str) -> None:
         if file.endswith('.rdf'):
-            self.lines = open('test.rdf', 'r', encoding='utf-8').readlines()
-            # self.text = ''.join(open('test.rdf', 'r', encoding='utf-8').readlines())
             self.file = file
+            print(f'reading {self.file}')
+            self.lines = open(self.file, 'r', encoding='utf-8').readlines()
+
+            self.extract_indices()
         else:
             assert 'Wrong file type provided.'
 
     def extract_indices(self):
 
-        for line in self.lines:
-            if line.startswith('$MFMT'):
-                self.start_index.append(self.lines.index(line))
-        check = re.compile(self.end_regex, re.MULTILINE)
+        if sys.platform == 'linux' or sys.platform == 'linux2' or sys.platform == 'darwin':
+            start = subprocess.run(
+                ['grep', '-n', f" '{self.molfile_no}' {self.file} > temp.temp"], capture_output=True)
+            print(start.stdout.decode('utf-8').split('\r\n'))
+            # added hint for developing on non-windows systems.
 
-        result = check.search(self.text)
-        print(result)
+        elif sys.platform == 'win32':
 
-        # if line.startswith('$DTYPE MOL:'):
-        #     end_index.append(lines.index(line)-1)
+            subprocess.run(
+                ['powershell', '-Command', f"findstr -n '{self.molfile_no}' {self.file} > temp"], capture_output=True)
 
-        start = subprocess.run(['powershell', '-Command',"findstr -n '^\$MFMT $\n' test.rdf"], capture_output=True)
-        print(start.stdout.decode('utf-8').split('\r\n'))
+            self.mol_start = subprocess.run(
+                ['powershell', '-Command', r"Get-Content .\temp | %{$_.Split(':')[0]}"], capture_output=True).stdout.decode('utf-8').split("\r\n")
 
-        molfiles = list(zip(self.start_index, self.end_index))
-        print(molfiles)
+            # subprocess.run(['powershell', 'rm temp'])
 
-        molfile_one = ''.join(self.lines[molfiles[0][0]+1: molfiles[0][1]+1])
-        molfile_two = ''.join(self.lines[molfiles[1][0]+1: molfiles[1][1]+1])
-        print(molfile_two)
+            subprocess.run(
+                ['powershell', '-Command', f"findstr -n '{self.end_regex}' {self.file} > temp2"], capture_output=True)
 
-        # with open('test.mol', 'w', encoding='utf-8') as f:
-        #     f.writelines(molfile_one)
-        # m = Chem.MolFromMolFile(r'path/to/*.mol')
+            self.mol_end = subprocess.run(
+                ['powershell', '-Command', r"Get-Content .\temp2 | %{$_.Split(':')[0]}"], capture_output=True).stdout.decode('utf-8').split("\r\n")
 
-        m = Chem.MolFromMolBlock(molfile_one)
-        m1 = Chem.MolFromMolBlock(molfile_two)
+            self.molfiles = list(zip(self.mol_start, self.mol_end))
 
-        print(lip.NumHDonors(m))
-        print(lip.NumHAcceptors(m))
+        self.calculate_HDHN()
+
+    def calculate_HDHN(self):
+        mol = ''.join(self.lines[int(self.molfiles[0][0]): int(self.molfiles[0][1])])
+
+        m = Chem.rdmolfiles.MolFromMolBlock(mol)
+
+        ND = lip.NumHDonors(m)
+        NA = lip.NumHAcceptors(m)
+
+        self.lines.insert(int(self.molfiles[0][1])+12, '$DTYPE MOL:RESULT(1):NumHDonors\n')
+        self.lines.insert(int(self.molfiles[0][1])+13, f'$DATUM {ND}\n')
+        self.lines.insert(int(self.molfiles[0][1])+14, '$DTYPE MOL:RESULT(1):NumHAcceptors\n')
+        self.lines.insert(int(self.molfiles[0][1])+15, f'$DATUM {NA}\n')
+
+        with open('mod_test_rdf.rdf', 'w') as f:
+            f.writelines(''.join(self.lines))
 
 
-        print(lip.NumHDonors(m1))
-        print(lip.NumHAcceptors(m1))
+obj = MolFileExtraction('test_rdf.rdf')
